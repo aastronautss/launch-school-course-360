@@ -787,3 +787,70 @@ Even when the application itself is running correctly, there's always the possib
 Let's make sure the code handles the exceptions properly. We not only want to be aware of these errors on our own, but also to wrap these errors with our own error type so that any program using this program will need to depend on Faraday or know any specifics of how the program works.
 
 It's best to hide the implementation of how the HTTP requests are made from any outside code as much as possible. If we define a clear interface we can ensure that we can change the HTTP library that our code uses at any point in the future without worrying about the change having any rippling effects throughout a larger codebase.
+
+### Extracting an API Client
+
+As it stood before this section, our `calculate_value` method did a whole lot of things. It performed calculations, it made requests to the API and parsed the results, and handled network errors.
+
+This violates the __single responsibility principle__, which says that each object in a system should only do one thing. The following code starts to untangle these concerns.
+
+```ruby
+require "json"
+require "faraday"
+
+class SymbolNotFound < StandardError; end
+class RequestFailed < StandardError; end
+
+# MarkitClient provides access to the Markit On Demand API
+class MarkitClient
+  def initialize(http_client=Faraday.new)
+    @http_client = http_client
+  end
+
+  # Get the most recent price for a stock symbol
+  # Returns the price as a Float.
+  # Raises RequestFailed if the request fails.
+  # Raises SymbolNotFound if a price cannot be found for the provided symbol.
+  def last_price(stock_symbol)
+    url = "http://dev.markitondemand.com/MODApis/Api/v2/Quote/json"
+    data = make_request(url, symbol: stock_symbol)
+    price = data["LastPrice"]
+
+    raise SymbolNotFound.new(data["Message"]) unless price
+
+    price
+  end
+
+  private
+
+  # Make an HTTP GET request using @http_client
+  # Returns the parsed response body.
+  def make_request(url, params={})
+    response = @http_client.get(url, params)
+    JSON.load(response.body)
+  rescue Faraday::Error => e
+    raise RequestFailed, e.message, e.backtrace
+  end
+end
+
+def calculate_value(symbol, quantity)
+  markit_client = MarkitClient.new
+  price = markit_client.last_price(symbol)
+  price * quantity.to_i
+end
+
+if $0 == __FILE__
+  symbol, quantity = ARGV
+  puts calculate_value(symbol, quantity)
+end
+```
+
+Now we have a `MarkitClient` class, which handles initiating the API calls. We just create a new client and give it the symbol for which we want the price. It doesn't make any cool calculations or do anything super fancy. It passes the actual HTTP request concerns on to the `Faraday` library.
+
+So we have three layers:
+
+- Probram Code (`calculate_value`) - does somethign useful that is the purpose of the program.
+- API Client (`MarkitClient`) - provides access to the data without hte user needing to know the specifics of how it is accessed.
+- HTTP Client (`Faraday`) - handles making the requests and networking concerns.
+
+When we write programs to work with web APIs, it is often helpful to reason about our code in these sorts of layers. This separates responsibilities and makes the code easier to understand.

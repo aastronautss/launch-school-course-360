@@ -4,24 +4,45 @@ require "faraday"
 class SymbolNotFound < StandardError; end
 class RequestFailed < StandardError; end
 
-def calculate_value(symbol, quantity)
-  url = "http://dev.markitondemand.com/MODApis/Api/v2/Quote/json"
-
-  http_client = Faraday.new
-  response = nil
-
-  begin
-    response = http_client.get(url, symbol: symbol)
-  rescue Faraday::Error::ConnectionFailed => e
-    raise RequestFailed, e.message, e.backtrace
+# MarkitClient provides access to the Markit On Demand API
+class MarkitClient
+  def initialize(http_client=Faraday.new)
+    @http_client = http_client
   end
 
-  data = JSON.load(response.body)
+  # Get the most recent price for a stock symbol
+  # Returns the price as a Float.
+  # Raises RequestFailed if the request fails.
+  # Raises SymbolNotFound if a price cannot be found for the provided symbol.
+  def last_price(stock_symbol)
+    url = "http://dev.markitondemand.com/MODApis/Api/v2/Quote/json"
+    data = make_request(url, symbol: stock_symbol)
+    price = data["LastPrice"]
 
-  price = data["LastPrice"]
-  raise SymbolNotFound, data['Message'] unless price
-  price.to_f * quantity.to_i
+    raise SymbolNotFound.new(data["Message"]) unless price
+
+    price
+  end
+
+  private
+
+  # Make an HTTP GET request using @http_client
+  # Returns the parsed response body.
+  def make_request(url, params={})
+    response = @http_client.get(url, params)
+    JSON.load(response.body)
+  rescue Faraday::Error => e
+    raise RequestFailed, e.message, e.backtrace
+  end
 end
 
-symbol, quantity = ARGV
-puts calculate_value symbol, quantity if $0 == __FILE__
+def calculate_value(symbol, quantity)
+  markit_client = MarkitClient.new
+  price = markit_client.last_price(symbol)
+  price * quantity.to_i
+end
+
+if $0 == __FILE__
+  symbol, quantity = ARGV
+  puts calculate_value(symbol, quantity)
+end
