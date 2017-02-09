@@ -1,0 +1,50 @@
+---
+http_interactions:
+- request:
+    method: get
+    uri: http://dev.markitondemand.com/MODApis/Api/v2/Quote/json?symbol=TSLA
+    body:
+      encoding: US-ASCII
+      string: ''
+    headers:
+      User-Agent:
+      - Faraday v0.11.0
+      Accept-Encoding:
+      - gzip;q=1.0,deflate;q=0.6,identity;q=0.3
+      Accept:
+      - "*/*"
+  response:
+    status:
+      code: 200
+      message: OK
+    headers:
+      Cache-Control:
+      - private
+      Content-Type:
+      - text/javascript; charset=UTF-8
+      Vary:
+      - Accept-Encoding
+      Server:
+      - ''
+      X-Aspnet-Version:
+      - ''
+      P3p:
+      - CP="NON PHY ONL UNI PUR FIN COM NAV INT DEM STA HEA CUR ADM DEV OUR IND",
+        policyref="/w3c/p3p.xml"
+      Set-Cookie:
+      - 3481%5F0=3BB46315E6BD5BE8FCB2CB4A6A4DD3EA3D86A5188A5C08FE9AD5CE492F5692D9;
+        path=/; HttpOnly
+      - GZIP=1; expires=Tue, 08-Feb-2022 19:32:46 GMT; path=/
+      X-Powered-By:
+      - ASP.NET
+      Date:
+      - Thu, 09 Feb 2017 19:32:46 GMT
+      Content-Length:
+      - '382'
+    body:
+      encoding: ASCII-8BIT
+      string: '{"Status":"SUCCESS","Name":"Tesla Inc","Symbol":"TSLA","LastPrice":262.08,"Change":4.59999999999997,"ChangePercent":1.78654652788565,"Timestamp":"Wed
+        Feb 8 00:00:00 UTC-05:00 2017","MSDate":42774,"MarketCap":42218205120,"Volume":3933014,"ChangeYTD":213.69,"ChangePercentYTD":22.6449529692545,"High":263.36,"Low":256.2,"Open":257.35}'
+    http_version: 
+  recorded_at: Thu, 09 Feb 2017 19:32:46 GMT
+recorded_with: VCR 3.0.3

@@ -691,3 +691,99 @@ Modern web applications are directly connected by their use of each other's APIs
 
 APIs communicate over HTTP. If the "human" web is made up of web sites, the "computer" web is made up of web APIs, since they're interfaces intended for use by computers.
 
+### HTTP Calls Within a Simple Program
+
+Consider the following program:
+
+```ruby
+require "json"
+require "faraday"
+
+url = "http://dev.markitondemand.com/MODApis/Api/v2/Quote/json"
+symbol, quantity = ARGV
+
+http_client = Faraday.new
+response = http_client.get(url, symbol: symbol)
+data = JSON.load(response.body)
+
+price = data["LastPrice"]
+total = price.to_f * quantity.to_i
+
+puts total
+```
+
+There shouldn't be too much surprising stuff here. We have a URL for an API call, and take in two arguments. We use a Faraday object to make a GET request at that URL, with a `symbol` parameters. We then use the JSON library to convert the body of the response into a hash. We do some calculations on the response, and spit out the total stock worth.
+
+### Wrap the Program in a Test
+
+We're going to write a spec for this program so that we can expand upon it without the risk of regressions.
+
+In its current state it is difficult to test thecode, since it takes inputs from STDIN, and prints to STDOUT. To solve this, we can wrap it in a method called `calculate_value`.
+
+When our spec requires `stock_totaler.rb`, it executes all the code in that file. This will print out something in spite of the fact that we never passed in any arguments. To prevent this from happening, our `puts` call should be on the condition that `$0 == __FILE__`. `$0` is a global variable that is set by Ruby when the program runs. It contains the name of the current executing program. When we run this program using `ruby stock_totaler.rb TSLA 1`, `$0` will be set to `stock_totaler.rb`. When we run this program using `rspec spec/stock_totaler_spec.rb`, `$0` will be whatever path `rspec` is executing from (usually a `bin`). `__FILE__` is a constant that always contains the name of the file in which it appears. So `__FILE__` in our `stock_totaler.rb` file will be just that, and `__FILE__` in `stock_totaler_spec.rb` will be that (actually, the absolute path to that file, since we're executing it from `rspec`). This means that these values are only equal if we are executing the program from that path as that program.
+
+### The Issues of Testing with External Service Dependencies
+
+Since our test is communicating with a live API, ther are a few shortcomings that need to be addressed.
+
+1. The test will fail if there is no network access.
+2. The test (in its current state at this stage in the lesson) is dependent on the exact values returned by the API. If the stock price changes, which it certainly will over time, the test will fail even though the code works as intended.
+3. The test runs slowly due to the external API call.
+4. Repeated or rapid tests could negatively affect the API. We want to avoid hammering the API with a lot of calls, especially when we are running multiple tests that have to do with code that executes those API calls. Most services have usage limits for API calls and will reject sources that abuse it.
+
+### Stubbing Out the Network
+
+Let's address these concerns. First we'll add a gem called `webmock`. We'll require that gem in our spec and set a local variable with the body of what would be our response (in string format). In the `it` call itself, we define the URL as the API endpoint we want to hit in the program, then we call `stub_request` and pass it some data referring to the request.
+
+```ruby
+url = "http://dev.markitondemand.com/MODApis/Api/v2/Quote/json?symbol=TSLA"
+stub_request(:get, url).to_return body: tesla_data
+```
+
+Note the query parameter in the URL string that we are passing into `stub_request`. The method needs to know the exact URL string we want it to intercept. This means GET requests must always include the query params.
+
+The test no longer relies on the external service to be called. As the project grows, this technique dramatically speeds up the runtime of tests.
+
+When webmock is loaded, all outgoing HTTP requests are disabled. So if we don't stub the request, an exception is raised.
+
+Another thing to note is that webmock supports specifying headers in our outgoing requests.
+
+### Problems with Manual HTTP Traffic Stubbing
+
+Here are some potential problems to consider.
+
+- __The way `tesla_data` is defined is fairly verbose.__
+
+As our test suite grows, these files can get fairly unwieldy. Also, we sometimes get request bodies and response bodies that are enormous. These take up a lot of space in our spec file, while our specs might not be all that large. To alleviate this we can possibly put this data in other files, such as fixtures. This, however, wouldn't address the next problem.
+
+- __There isn't a simple way to keep the value of `tesla_data` up-to-date.__
+
+If the API changes, we don't know if our code will break, since we're not running against the real API.
+
+- __We're only providing a stubbed value for a response body.__
+
+While our current stub doesn't rely on special request headers, this might be the case for future API calls. This becomes difficult to maintina if we want to manually specify request and response headers and bodies.
+
+### Deterministic Network Testing with VCR
+
+The range of testing tools is rapidly expanding and maturing. One such testing tool is VCR, which we can use to clean up our API-dependent tests while keeping them up-to-date as APIs change.
+
+With our next change to our spec, we removed the stuff related to `webmock`, including the call to `stub_request`. We added a call to `VCR.configure`, and added `:vcr` as an argument to our call to `it`.
+
+The first time we run the test we might have a failing test if the price for TSLA has changed. We just need to revise our test to reflect the new price. VCR has recorded this API call, and all subsequent test runs will be stubbed from this recorded API call.
+
+Looking at our `VCR.configure` block, note that we've specified a few things. First, we have the directory in which we are storing cassettes. Each HTTP interaction gets recorded by VCR and stored as a YAML file. Next, we specify that we're using `webmock` to manage the stubbing of our requests. Our call to `#configure_rspec_metadata!` sets up automatic VCR integration with Rspec, which lets us pass `:vcr` into our `#it` call. These make it so VCR only runs when we have this argument passed in.
+
+So if we change the stock being fetched with our current config, we'll get an error. VCR recognizes that this request deviates from what VCR knows. This is because VCR will only record requests once per method per URI, since we have our `:record` flag set to `:once`. It is seeing a combination of `method` and `uri` that it doesn't recognize. It gives us a few options that we can use. For our purposes we're going to just change the spec back.
+
+### Service Response with Errors
+
+Say we want to run our code with invalid input. What should our program do in this case? Currently, it does run, giving us a value of 0.0. We have two decisions to make: how can we determine how a request has failed, and how can we respond to the failed request.
+
+### Handle Connection Errors
+
+Even when the application itself is running correctly, there's always the possibility of something happening between the client and the server that causes the request to fail. Fortunately, Faraday takes care of quite a few network errors, and raises an instance of `Faraday::Error::ConnectionError`.
+
+Let's make sure the code handles the exceptions properly. We not only want to be aware of these errors on our own, but also to wrap these errors with our own error type so that any program using this program will need to depend on Faraday or know any specifics of how the program works.
+
+It's best to hide the implementation of how the HTTP requests are made from any outside code as much as possible. If we define a clear interface we can ensure that we can change the HTTP library that our code uses at any point in the future without worrying about the change having any rippling effects throughout a larger codebase.
