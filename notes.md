@@ -854,3 +854,24 @@ So we have three layers:
 - HTTP Client (`Faraday`) - handles making the requests and networking concerns.
 
 When we write programs to work with web APIs, it is often helpful to reason about our code in these sorts of layers. This separates responsibilities and makes the code easier to understand.
+
+## Logging, Error Handling, and Authentication
+
+### Intro
+
+Moving on from our MarkitOnDemand application, we're going to explore some concerns with using more involved APIs in production applications.
+
+- Logging
+- Error Handling
+- Authentication
+- Middlewares
+- Caching
+- Pagination
+- Testing
+- Non-idempotent Methods
+
+"We will also cover the use of the Faraday Ruby library and how a stack of small components can provide sophisticated functionality for working with web APIs."
+
+### Project Goals
+
+We're going to use the GitHub API to build some reponts that analyze a uer's activity on the site. We'll create a command-line program that can display three reports: activity stats, user repository stats, and more
