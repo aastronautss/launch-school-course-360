@@ -875,3 +875,235 @@ Moving on from our MarkitOnDemand application, we're going to explore some conce
 ### Project Goals
 
 We're going to use the GitHub API to build some reponts that analyze a uer's activity on the site. We'll create a command-line program that can display three reports: activity stats, user repository stats, and more
+
+### Discovery and Implementation
+
+"When working with web APIs, it doesn't always make sense to start right out of the gate writing failing tests, as one would with test-driven development. APIs can be complicated and a lot of times, you won't be ready to write tests right from the beginning. It often takes investigation before you understand what the code even needs to do! This investigation can take many forms: reading documentation, trying out code and libraries in interactive sessions, and even reading existing code to see how it works. Sometimes it makes sense to build a small prototype or spike implementation of a project to try out some ideas before commiting to an approach.
+
+"When it is time to write production code, it is a good idea to go back and add tests or rewrite the code in a test-driven manner. This isn't as much work as it sounds, since much of the hard work of getting something to work will already be somewhat completed.
+
+"We will be using this approach in this project. After exploring some new web API concepts and seeing how they affect the implementation in our Ruby project, we will take a step back and look at how the concepts affect testing."
+
+### Logging While Working with APIs
+
+Logging lets us know what our code has done. Logs work by adding information to the end of a file, with the information being details about how the software is operating in production systems. Logs are often the only way to discover the cause of a problem.
+
+The Rails log logs every database query and template render that occur while responding to a request. This is thorough but it has some downsides:
+
+- __It may be at the wrong granularity__
+
+It can be difficult to trace the relationship between a complicated problem and a list of minute events that have been logged, especially if the problem is a result of the combination of many of these events.
+
+- __It might not be logging the right thing__
+
+An application will have some domain-specific data that is neccessary to understand how the code operates. Most of the time, this information is not going to be logged automatically and doing so will require some development time.
+
+- __It is noisy__
+
+Tryign to find the line of a large log that represents a specific event can be challenging, and in a busy application, the size of the logs can grow quickly.
+
+It is common to address these problems by logging to specific parts of a codebase that are of interest. For this project we are mostly interested in what HTTP requests out code makes as a result of user interaction and decisions we've made about how the application works.
+
+We'll also look at ways to control how much logging occurs in order to maximize their signal-to-noise ratio.
+
+### Error Handling: An Overview
+
+#### Bad Input
+
+Whenever we're getting information from an external source, there is a chance that something about that information will be incompatible with the assumptions made by the application. Some input can be a valid format, but considered invalid for semantic reasons.
+
+Sometimes this input can come from other systems (i.e. not just user input). Many input errors are caused by incompatibilities in how different systems represent data.
+
+#### Invalid or Missing Credentials
+
+Many API tokens have a limited lifetime and need to be refreshed. Since access via a token or OAuth or similar can be revoked, it's best not to assume credentials are valid in another system.
+
+#### An API Request was Invalid
+
+Validation errors are a common source of rejected requests. Make sure your input matches what is suggested by an API's documentation, and validate locally to match.
+
+#### Network Issues
+
+Network errors are often difficult to anticipate and are often out of your control to resolve.
+
+Degrading connections are also a common source of issues, and are harder to detect since requests don't fail outright. Logging is important in these cases because they can detect and assist in diagnosing this type of problem.
+
+#### Rate Limit Exceeded
+
+Many web APIs have a limit on how many requests you can send them within a given time frame. If the rate is exceeded, an error will be returned.
+
+#### Unexpected Responses
+
+Sometimes a server will return a 500 or another response that the code isn't designed to handle. Since each response typically needs to be sepecifically handled in code, if a certain response wasn't taken into account when the program was written, it will be unable to process the response and proceed.
+
+### General Approach to Handling API Related Errors
+
+In general, it's best to handle errors in the same layer of the coe that they originate from. As an example, it would be ideal to catch exceptions related to low-level networking problems in the HTTP client and then deal with the problem or raise an appropriate error.
+
+The HTTP client we're using actually does this. It catches a lot of exceptions raised by the underlying network code and then raises as single exception. This allows code that uses Faraday to only have to worry about a single type of exception and prevents the implementation details of how Faraday works from leaking out in higher layers of the code.
+
+If an error occurs that is the result of user input, try to handle it in the part of the code that is already interacting with the user.
+
+#### Can a resolution be automated?
+
+Some errors can be automatically handled by an application. This is the ideal way to gracefully handle problems that may arise when working with an API. some developers will argue that problems that can be expected are really just part of normal operations, regardless of the technical definition, it is a good idea for an application to gracefully ahndle common errors that can occur.
+
+Many times this will involve presenting users with a means to resolve the problem themselves. If a user's credentials are no longer valid, prompt them to grant new ones. If a request was rejected because it was invalid, present the user with an interface where they can make corrections.
+
+There are also some errors that a program can attempt to resolve without a user even knowing. Some networking issues fall into this category and can be retired safely to work around intermittent connection problems.
+
+#### See if the error can be detected early and handled accordingly.
+
+Verifying the presence and format of data is a good way to tect problems before making any API reuqests.
+
+#### If the request is idempotent and the failure was not a result of an invalid request, retry it.
+
+Networking issues are often temporary, so a retry interval is a common practice. Be sure to limit retries, and incorporate a growing backoff interval.
+
+#### If the request was rejected due to invalid data, present the data and a human-friendly message to the user
+
+Some APIs will return an error message in response to invalid requests, but these aren't typically intended for end users. It's best to write our own error messages to present to our users. This will help us reframe the problem in a way that relates directly to a user's objectives. Include steps that a user can take to resolve the issue.
+
+Conversely, if there is nothing a user can do to improve the situation, say so. The situation is indicative of a design problem with the system.
+
+### If a request failed due to exceeding a rate limit, wait and retry it later.
+
+IF you are encountering frequent rate limiting errors, there is probably an improvement that needs to be made to the system's design. Many apps that are very 'talkative' with APIs will need to use some form of local cache in order to deviver acceptable levels of performance and availability.
+
+Consider the ramifications of this delay on your users. It may be necessary to notify them that some features are temporarily unavailable or that some datam ay not be updated immediately.
+
+#### If all else failse, raise an exception.
+
+Try to raise an exception that is as speicfic as possible. Production applications typically collect information about errors via logging or notification systems, and including relevant details in the exception will assist the investigating developer diagnose the problem and address it.
+
+Think about how an exception is handled at the userlevel. Does something appear to just not happen to the user? Should they be notified that somethign went wrong? It is tempting to catch Ruby exceptions and use the value returned by calling `message` as a human_friendly error message to display to users. A lot of the time, though, the information contained in the exception isn't appropriate for exposure to users, and the dev will need to handle the problem in another way.
+
+### Rate Limiting
+
+Most web API providers limit the number of requests that can be made to its API by a single user. In many cases the limit will be higher for users with accounts than it would be for anonymous users, although most web APIs are moving toward requiring auth for all users. Paid plans often offer higher request limits.
+
+A program that makes a lot of API requests should minimize the number of requests and also gracefully handle hitting a rate limit should it occur.
+
+#### Minimizing requests
+
+- Take advantage of resource params and API features.
+
+If your are fetching data from a collection that uses pagination, use the largest page size that is supported. This will transmit the data using as few requests as possible.
+
+Some APIs will provide a way to request that associated objects are embedded in a resource's representataion, obviating the need for add'l API calls
+
+- Don't make repeat reqeusts
+
+It is good to examine what API interactions your code is making and look for duplicate requests. This often happens when looping through resources and performing additional requests for each one. We will see ways to store the responses for API requests and re-use them in future sessions.
+
+### Authentication: Intro
+
+Many web APIs require users to authenticate with the provider during each request made to the service. This allows the proder to control who accesses the service and makes it easier to handle abusive users.
+
+We want to pay attention to _who_ the user is when authenticating with an API. It won't always be the developer of the application, but and end user who has authorized third party access to the APi on their behalf.
+
+We need to keep two things in mind: how to actually include the credentials in an HTTP request, and what values to send. Here are a few of the different options--keep in mind that they may be combined in a variety of ways.
+
+#### Types of Credentials
+
+##### Username and Password
+
+This is how most users manually sign into a service. This occurs with web APIs, but it's fairly rare due to the following weaknesses:
+
+- Allowing an application to access a web API on your behalf means giving that application your username and password. This requires that the application store those credentials.
+- This means that all applications that access the account have the same credentials. There is no simple way to revoke access from a single application. If anything changes, all formerly authorized applications will no longer have access.
+
+Some services improve on this by providing each user with a single _access token_ to be used for API access. This improves security somewhat by removing the need for a user to share their password with a third party, but we still can't granularly modify access control.
+
+The solution is to supply each application with a unique set of credentials, which is where OAuth comes in.
+
+##### OAuth
+
+OQuth describes how applications can allow users to authorize third parties to access their content without having to expose their personal credentials. Most modern applications support 2.0, but there is an older version which is more complicated to use.
+
+We'll talk more about OAuth in the final project.
+
+##### Other Access Tokens
+
+OAuth can be difficult to implement for some types of applications, some API providers support an alternate way for users to manually generate access tokens that can then be given to an application to grant it access. Google calls these toeksn _App passwords_, and GitHub refers to them as _personal access tokens_. These are commonly used when services implement two-step verification, without which there would be no way for a user to grant an application access without thm being physically present.
+
+If such a token is lost, it would need to be regenerated.
+
+### Authentication: Sending Credentials in an API Request
+
+Every request that requires authentication must include its credentials, since HTTP is a stateless protocol. There are two main ways to include this: in the headers, as a URL parameter. Let's take a look at what each of these looks like.
+
+#### Credentials in an HTTP Header
+
+##### Basic Auth
+
+Some sites use basic auth, which for the user comes in the form of a dialog box prompting for a username and a password.
+
+With HTTPie, we can provide these credentials with the `-a` flag in the form of `-a username` or `-a username:password`. If we send the request and print the headers, we get something like this:
+
+```
+$ http -p H https://api.github.com -a username:password
+GET / HTTP/1.1
+Accept: */*
+Accept-Encoding: gzip, deflate
+Authorization: Basic dXNlcm5hbWU6cGFzc3dvcmQ=
+Connection: keep-alive
+Host: api.github.com
+User-Agent: HTTPie/0.8.0
+```
+
+The value for the `Authorization` header is computed using a simple formula, the conversion for which is usually handled by nearly all HTTP client libs.
+
+##### Other Auth Headers
+
+HTTP basic auth isn't the only way to provide credentials in a request header. Some services allow a consumer to specify an access token or other identifier in a header, either in the `Authorization` header or, in some cases, an `X-ACCESS-TOKEN` or other such header. Here's an example of a request made to the GitHub API using OAuth:
+
+```
+$ http -p H https://api.github.com 'Authorization: token OAUTH_TOKEN'
+GET / HTTP/1.1
+Accept: */*
+Accept-Encoding: gzip, deflate
+Authorization:  token OAUTH_TOKEN
+Connection: keep-alive
+Host: api.github.com
+```
+
+The specific header may vary, but the purpose is the same.
+
+#### Passing Credentials as a URL Parameter
+
+In some cases we can use query params for our authentication. The values are essentially the same as they would be if we were to put them in the header:
+
+```
+https://api.github.com?access_token=ACCESS_TOKEN
+```
+
+### Authentication: Managing Credentials Safely
+
+All credentials need to be securely stored for future use. This means we shouldn't use usernames and passwords to consume APIs where possible. Never persist usernames and passwords anywhere.
+
+For this project we'll be using a personal access token from GitHub. We should store this token in the code where it is being used to make API requests, but doing so makes it far too easy to accidentally commit it to a public repo.
+
+We should never give this a chance of happening in the first place. This means we should never include credentials in code files. Instead, store them somewhere that provides easy access but keeps the actual credentials persisted outside the project directory.
+
+We can:
+
+- Store them as environment variables, adding them to our shell config file (`.bashrc`, etc).
+
+```
+export SUPER_SECRET_AUTH_TOKEN=asecretvalue
+```
+
+We can access this from most any programming language by a program running under that shell. In Ruby, it's stored as a key in the `ENV` hash:
+
+```ruby
+ENV['SUPER_SECRET_AUTH_TOKEN'] #=> `asecretvalue`
+```
+
+This value will be accessible to any code running on your machine. If you need to keep several different credentials for different projects, you will need to give them unique names.
+
+- The gem `dotenv` provides a similar setup, but it allows a project's credentials to be kept in a file within the project. It is a good way to keep credentials for development environments. __We must use the `.env` file to `.gitignore`_.
+
+Environment variables are a common way to store secret values in production. It is how configuration is provided to applications deployed to Heroku or other hosting providers that suppport 12 factor apps.
+
+## Client Side Architecture with Middlewares
