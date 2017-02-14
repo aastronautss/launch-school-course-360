@@ -1107,3 +1107,110 @@ This value will be accessible to any code running on your machine. If you need t
 Environment variables are a common way to store secret values in production. It is how configuration is provided to applications deployed to Heroku or other hosting providers that suppport 12 factor apps.
 
 ## Client Side Architecture with Middlewares
+
+### Patterns When Working with APIs
+
+After adding our "repos" method to our client class, we're repeating a lot of code. In either case, we have to prepare for the request, headers, logging, error handling, and parsing the data. There are layers of concerns across the request/response cycle. Currently we're putting them all inline, and they're all noisy and distract from the method's core functionality.
+
+We can extract some of the logic into methods, but that still requires that we invoke those methods in our methods. Alternatively, we can take advantage of the fact that these layers of concerns are always around the HTTP request and response. Instread of extracting them out, we can push this logic into Faraday itself to become Faraday middlewares.
+
+### Faraday and the Middleware Paradigm
+
+Faraday was originally created by Rick Olson, inspired by the middleware paradigm of Rack. Rather than responding to requests like Rack does, Faraday is used to perform requests.
+
+Here's an example of Faraday put to use:
+
+```ruby
+require 'faraday'
+
+conn = Faraday.new(url: 'http://sushi.com') do |c|
+    c.use Faraday::Request::UrlEncoded  # encode request params as "www-form-urlencoded"
+    c.use Faraday::Response::Logger     # log request & response to STDOUT
+    c.use Faraday::Adapter::NetHttp     # perform requests with Net::HTTP
+end
+
+res = conn.get '/nigiri/sake.json'      # GET http://sushi.com/nigiri/sake.json
+res.body
+
+conn.post '/nigiri', name: 'Maguro'     # POST "name=maguro" to http://sushi.com/nigiri
+```
+
+This doesn't give us much over vanilla `Net::HTTP`. The beauty, though, is that we can change how calls to `#get` or `#post` or whatever by adding or swapping middlewares in our call to `.new`.
+
+Faraday middleware is written similarly to Rack middleware. Middleware is usually classes that define the `call(env)` method:
+
+```ruby
+class MyMiddleware
+  def initialize(app, options = {})
+    @app = app
+    @options = options
+  end
+
+  def call(env)
+    # information about the request is in the `env` hash
+    $stderr.puts env[:url]
+    # continue processing
+    @app.call(env)
+  end
+end
+
+# how to use it in a stack:
+builder.use MyMiddleware, some_option: "value"
+```
+
+The `env` hash is in a different format from the Rack. Otherwise, this paradigm is mostly identical to that of Rack.
+
+We can easily create a stack that handles all our present needs. Here's a use-case for the GitHub API:
+
+```ruby
+require 'logger'
+# This is an imaginary 3rd-party extension for some add'l middleware:
+require 'faraday_middleware'
+
+conn = Faraday.new('https://api.github.com/') do |c|
+  c.use FaradayMiddleware::ParseJson, content_type: 'application/json'
+  c.use Faraday::Response::Logger, Logger.new('faraday.log')
+  c.use FaradayMiddleware::FollowRedirects, limit: 3
+  c.use Faraday::Response::RaiseError # raise exceptions for 4xx & 5xx responses
+  c.use Faraday::Adapter::NetHttp
+end
+
+con.headers[:user_agent] = 'MyLib v1.2'
+
+res = conn.get '/repos/technoweenie/faraday'
+res.body['issues_count'] #=> 8
+```
+
+The custom middlewares still need to be implemented, but they can reside in separate files away from where we actually consume the API.
+
+We can also switch from `Net::HTTP` to another library, which will allow us to perform many requests in parallel. This requires little to no changes to our existing code.
+
+The nicest part about Faraday is that if you're using an open source API wrapper library that uses Faraday, we can insert our own middleware in its stack to add features that were not originally present. One use-case is to add caching in order to avoid hitting their HTTP request limits.
+
+`faraday_middleware` actually does exist on GitHub, and it provides classes to parse JSON, XML, sign OAuth requests, cache responses, and more.
+
+### Faraday Middleware
+
+Again, here's a skeleton for Faraday Middleware:
+
+```ruby
+class MiddlewareSkeleton < Faraday::Middleware
+  def initialize(app, options={})
+    super(app)
+    # Do any other setup
+  end
+
+  def call(env)
+    # Do something with the request
+    response = @app.call(env) # Process the request
+    response.on_complete do
+      # Do something with the response
+    end
+    response
+  end
+end
+```
+
+From the lesson:
+
+"Faraday middlewares operate as a stack. Each one is instantiated by Faraday, and passed a reference to the next part of the stack, which is stored as `@app` in the call to `super` in `#initialize`. When a request is being processed, the first middleware's `call` method is called with the `env`, which is Faraday's abstraction of the entire request and response. A middleware can do whatever it needs to do and then pass control on to the next layer of the stack with `@app.call(env)`. An instance of `Faraday::Response` is returned back up the stack in reverse order and then returned by this method, which provides an opportunity to do work after the request has been processed downstream. It is best to perform this work by specifying an `on_complete` callback on the response in order to be compatible with streaming responses."
