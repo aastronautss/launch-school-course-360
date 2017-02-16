@@ -1214,3 +1214,222 @@ end
 From the lesson:
 
 "Faraday middlewares operate as a stack. Each one is instantiated by Faraday, and passed a reference to the next part of the stack, which is stored as `@app` in the call to `super` in `#initialize`. When a request is being processed, the first middleware's `call` method is called with the `env`, which is Faraday's abstraction of the entire request and response. A middleware can do whatever it needs to do and then pass control on to the next layer of the stack with `@app.call(env)`. An instance of `Faraday::Response` is returned back up the stack in reverse order and then returned by this method, which provides an opportunity to do work after the request has been processed downstream. It is best to perform this work by specifying an `on_complete` callback on the response in order to be compatible with streaming responses."
+
+## Client Side Caching
+
+### Intro to Caching
+
+The concept of caching is pretty simple: store the results of doing something so it doesn't have to be done again. This can be anything, but it is most often something that is costly in terms of computation, transfer, or time. HTTP requests made across the internet are much slower than calls made to application components that are 'closer', such as databases or files on the filesystem. Handling these requests has a cost for the API provider as well, so it's best to minimize the number of API requests made, for the sake of both parties.
+
+A browser's cache is a great example of a system that avoids costly transfers where possible. Using HTTP headers, websites can enable browsers to reuse most data between multiple pages. It also prevents the need to wait for these files to be sent over the network, which speeds up page rendering. Google recommends that a server's response times should be under 200ms.
+
+Here are the different levels of caching:
+
+- __HTTP response caching__: Most web browsers do this by default. The responses to every HTTP request made by the browser are stored in a cache and used whenever a duplicate request is made. The specific rules that govern what is cached and for how long are specified by HTTP headers. We'll cover some of these headers later on.
+
+- __Domain object caching__: This is when an object in a system contains some data from an external source--this object is determined to be stale or not without maintaining a separate cache. For example, a price comparison site might collect data from many ecommerce sites and store all information for a product on a single table. This site would probably store the date and time that the data was collected.
+
+- Between those types there is another caching strategy, where a parsed or otherwise processed representation of the response's value is cached, but it isn't a fully fledged domain object. "We might add this kind of cache to the stock calculation project we built earlier in this course. We only need to keep track of the price for a stock and when this value was last updated. As a result, we might store only these values in a cache instead of persisting the entire HTTP response (and if we used a cache that could auto-expire keys, we would only need to store the price)."
+
+Caching HTTP responses is the most universal and re-usable form, but it also has the least opportunity to be optimized for efficiency as it knows nothing about how data from responses is being used. As caching systems become smarter and more aware of other parts of an application, they also become more coupled to those specific components and the system as a whole becomes more difficult to change. As a result, it ususally makes sense to start with caching raw HTTP responses, which is what we will be doing in this lesson.
+
+### HTTP Caching
+
+When an HTTP server sends over a response, it also gives us a bunch of headers. The `Cache-Control` header asks the browser to cache the response for up to `n` seconds, and the `ETag` header provides a "validation" token that can be used after the response has expired to check if the resource   has been modified.
+
+Let's say we send a GET request at `/file` and receive the following headers:
+
+```
+200 OK
+Content-Length: 1024
+Cache-Control: max-age=120
+ETag: "x234dff"
+...
+```
+
+#### Validating Cached Responses with ETags
+
+The server uses `ETag` to communicate a validation token. This enables efficient resource update checks--no data is transferred if the resource has not changed.
+
+After our initial fetch's `Cache-Control` has expired, let's say the browser initiates a request for the same resource. The browser will first check the local cache, but finds it can't use it because the response has expired. The browser could send a new request, but this isn't efficient if the resource has changed--in such a case we wouldn't need to download the data again since it's already in cache.
+
+Instead, we have a validation token (`ETag`) to help get around this. It usually comes in the form of a hash or some other fingerprint of the file's contents. The client sends it to the server on the next request in the form of one of the headers:
+
+```
+GET /file
+If-None-Match: x234dff
+```
+
+The server then determines if the resource has changed by matching the `ETag` up with the file requested. If the tag matches, it sends back a `304 Not Modified` response:
+
+```
+304 Not Modified
+Cache-Control: max-age=120
+ETag: x234dff
+```
+
+The client now knows it doesn't have to redownload the resource.
+
+As a web developer, we don't need to know the nitty-gritty of how the client chooses to cache its data. We just need to make sure we are providing the necessary ETag tokens.
+
+#### `Cache-Control`
+
+Each resource defines its own caching policy using the `Cache-Control` header. This tells the client who can cache the data, under what conditions, and for how long.
+
+The fastest request is one that doesn't have to go out to the server. A cached response will let us eliminate all network latency and avoid data charges for data transfer. To achieve this, the server is allowed to provide a few `Cache-Control` directives.
+
+##### `no-cache` and `no-store`
+
+`no-cache` indicates that the returned response can't be used to satisfy a subsequent request to the same URL without first checking with the server to see if the response has changed. In this case, we can still store the data if an `ETag` is provided, but we'd still need at least one roundtrip to check if the resource has changed.
+
+`no-store` disallows the client from storing any version of the returned response. This is useful if the response contains private banking data, for example. A full response must be downloaded with each request.
+
+##### `public` vs. `private`
+
+If the response is marked as `public`, then it can be cached, even if there is HTTP authentication associated with it, and even if the response status code isn't normally cacheable. This typically isn't required, since directives like `max-age` imply that the response is cacheable.
+
+When a response is marked `private`, the response can be cached, but it is typically meant for a single user. Therefore, intermediate caches are not allowed to cache them. A browser can cache private pages, but (for example) a CDN cannot.
+
+##### `max-age`
+
+This is the amount of time that the response can be cached for, in seconds.
+
+##### Optimal cache policy
+
+https://developers.google.com/web/fundamentals/performance/optimizing-content-efficiency/images/http-cache-decision-tree.png
+
+You should aim to cache as many resources as possible on the client for the longest possible period. Furthermore, validation tokens should be provided to enable efficient revalidation.
+
+Among the top 300,000 sites, the browser can cache nearly half of all of their resources. Some sites cache more than 90% of their resources. It's always a good idea to make sure you've identified all cacheable resources and ensure they return appropriate `Cache-Control` and `ETag` headers.
+
+#### Invalidating and Updating Cached Resources
+
+### Conditional Requests
+
+Caches are typically built with the assumption that the data they're storing is reasonably up-to-date.
+
+A cache is said to be "invalid" or "stale" when it no longer holds data that is known to be recent enough for use. Typically this is determined based on how long the data has been in the cache. Some web APIs provide information to consumers about how long content should be cached for in the HTTP headers of their responses.
+
+Here's an example from the GitHub API:
+
+```
+$ http https://api.github.com/repos/basecamp/local_time/commits/a4702051
+HTTP/1.1 200 OK
+Access-Control-Allow-Credentials: true
+Access-Control-Allow-Origin: *
+Access-Control-Expose-Headers: ETag, Link, X-GitHub-OTP, ...
+Cache-Control: private, max-age=60, s-maxage=60
+Content-Encoding: gzip
+Content-Security-Policy: default-src 'none'
+Content-Type: application/json; charset=utf-8
+Date: Fri, 06 Feb 2015 18:01:04 GMT
+ETag: W/"c9ba8bc677c4676b192651e1f9407cb2"
+Last-Modified: Tue, 03 Feb 2015 14:15:08 GMT
+Server: GitHub.com
+Status: 200 OK
+Strict-Transport-Security: max-age=31536000; includeSubdomains; preload
+Transfer-Encoding: chunked
+Vary: Accept, Authorization, Cookie, X-GitHub-OTP
+Vary: Accept-Encoding
+...
+```
+
+__Cache-Control__ says who can cache the content and for how long. `private` means that responses should only be cached by the end client, and not by intermediate proxies. `max-age` specifies in seconds how long the cached content can be used before it needs to be refetched.
+
+Per the above example, our information can be cached for up to 60 seconds, and only by the client who requested it.
+
+`ETag` and `Last-Modified` identify the specific version of the resource contained in this response. This becomes useful when a value from the cache is older than its max-age and needs to be refetched. We can provide one of these values to the server when fetching a resource again, and the server will be able to respond with a special response if the resource hasn't changed since it was last fetched.
+
+__ETag__ headers are usually the computed hash for the returned content, althoguh API consumers must treat them as opaque tokens. That is, they are identifiers that have a meaning to the remote system, and their internal structure should not be relied on.
+
+__Last-Modified__ headers are the date the resource was last modified.
+
+Let's make a few requests from the GitHub API.
+
+```
+$ http https://api.github.com/repos/basecamp/local_time/commits/a4702051
+HTTP/1.1 200 OK
+Access-Control-Allow-Credentials: true
+Access-Control-Allow-Origin: *
+Access-Control-Expose-Headers: ETag, Link, X-GitHub-OTP, ...
+Cache-Control: private, max-age=60, s-maxage=60
+Content-Encoding: gzip
+Content-Security-Policy: default-src 'none'
+Content-Type: application/json; charset=utf-8
+Date: Sat, 07 Feb 2015 02:29:47 GMT
+ETag: W/"c9ba8bc677c4676b192651e1f9407cb2"
+Last-Modified: Tue, 03 Feb 2015 14:15:08 GMT
+Server: GitHub.com
+Status: 200 OK
+...
+
+{
+    "author": {
+        "avatar_url": "https://avatars.githubusercontent.com/u/5355?v=3",
+        "events_url": "https://api.github.com/users/javan/events{/privacy}",
+        "followers_url": "https://api.github.com/users/javan/followers",
+        ...
+    }
+}
+```
+
+The request received a complete response body. If we take the value we provided in the `ETag` header and pass it back to the server in the `If-None-Match` header when requesting the same resource, the server will only send the full response if it has been changed.
+
+```
+$ http https://api.github.com/repos/basecamp/local_time/commits/a4702051 If-None-Match:'"c9ba8bc677c4676b192651e1f9407cb2"'
+HTTP/1.1 304 Not Modified
+Access-Control-Allow-Credentials: true
+Access-Control-Allow-Origin: *
+Access-Control-Expose-Headers: ETag, Link, X-GitHub-OTP, ...
+Cache-Control: private, max-age=60, s-maxage=60
+Content-Security-Policy: default-src 'none'
+Date: Fri, 06 Feb 2015 21:40:39 GMT
+ETag: "c9ba8bc677c4676b192651e1f9407cb2"
+Last-Modified: Tue, 03 Feb 2015 14:15:08 GMT
+Server: GitHub.com
+Status: 304 Not Modified
+Strict-Transport-Security: max-age=31536000; includeSubdomains; preload
+Vary: Accept-Encoding
+...
+```
+
+The server returns a `304` and an empty response body because the resource hasn't changed since we last requested it.
+
+We can also use the `Last-Modified` header for this same purpose, using the `If-Modified-Since` header:
+
+```
+$ http https://api.github.com/repos/basecamp/local_time/commits/a4702051 If-Modified-Since:'Tue, 03 Feb 2015 14:15:08 GMT'
+HTTP/1.1 304 Not Modified
+Access-Control-Allow-Credentials: true
+Access-Control-Allow-Origin: *
+Access-Control-Expose-Headers: ETag, Link, X-GitHub-OTP, ...
+Cache-Control: private, max-age=60, s-maxage=60
+Content-Security-Policy: default-src 'none'
+Date: Fri, 06 Feb 2015 21:40:25 GMT
+Last-Modified: Tue, 03 Feb 2015 14:15:08 GMT
+Server: GitHub.com
+Status: 304 Not Modified
+Strict-Transport-Security: max-age=31536000; includeSubdomains; preload
+Vary: Accept-Encoding
+...
+```
+
+### Problems with In-Process Caching
+
+If we run our `reports` script, we might notice that the caching middleware doesn't really improve the performance of our application. This is because our command line program creates a new instance of our client, and its own stack of Faraday middlewares. They do not share the same in-memory storage.
+
+We can prove that our cache works by calling `user_info` on our client twice in one run of our program. This first creates a problem with our JSON parsing middleware, which converts our response into a hash from a string-like object. In our second time around, because the JSON parsing middleware is closer to the application than our caching middleware (which is closer to the network), the JSON parser is already receiving a cached version of the response, which was already a hash. We can't use `JSON.parse` on a hash.
+
+This is a tricky bug, and the solution would be to save a clone of our response to memory, rather than the response itself.
+
+We need to make a deep clone--the way to do that in Ruby is to load a Marshal dump:
+
+```ruby
+Marshal.load Marshal.dump(response)
+```
+
+We can push this into our `Storage::Memory` instance. There are a few advantages of serializing it this way, too. Now we only need to save and retrieve strings to our storage, which will allow us to use Redis and similar libs. Almost all tools understand strings.
+
+Now that we have our caching mechanism abstracted away, we can now have our cache storage on an entirely separate process on our machine, or on another machine altogether.
+
+For our assignment we are using `Memcached` as our caching solution.
