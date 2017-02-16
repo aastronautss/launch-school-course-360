@@ -1433,3 +1433,97 @@ We can push this into our `Storage::Memory` instance. There are a few advantages
 Now that we have our caching mechanism abstracted away, we can now have our cache storage on an entirely separate process on our machine, or on another machine altogether.
 
 For our assignment we are using `Memcached` as our caching solution.
+
+## Working with Paginated Data
+
+### Patination Schemes
+
+GitHub's "events" endpoints return paginated values. This happens when a collection contains many elements. In these cases, there is no way to return all of the elements in a single response. So, an API will return some of the elements and provide a way for clients to load additional elements on demand. This is called pagination.
+
+#### A Simple Pagination Scheme
+
+The simplest way to accomplish that is for the API to accept two parametes in a request: `page` and `per_page` (the keys for these will vary). GitHub's search API will return up to 100 items. Below we will get a response that returns items 1 - 100 in the search results:
+
+```
+https://api.github.com/search/code?q=factory+user:mozilla&per_page=100
+```
+
+When we want the next "page," we'll just ask for page 2:
+
+```
+https://api.github.com/search/code?q=factory+user:mozilla&per_page=100&page=2
+```
+
+With this scheme it is possible to receive a result more than once if a new element has been created between requests, pushing all other elements down the index list. This is only a problem with very active services, and the way to get around it is to preserve the unique identifier for each element and omit the duplicates.
+
+Twitter has a more robust approach to pagination, since tweets are constantly being generated.
+
+#### Other Pagination Schemes
+
+There are a few other fairly common ways to paginate a resource:
+
+- __Next page tokens__
+
+Some APIs will provide a "next page" token in a response which we can send back to the server in a subsequent request, causing the next page of data to be returned.
+
+- __Cursor-based pagination__
+
+This happens when a request provides data for the last element seen, such as the ID or creation data. The Stripe API uses this--a request includes the last creation time for the last received result. When we send this to the server, it will return the next page of data that occurred after that time.
+
+- __Pagination with hypermedia links__
+
+We'll focus on this next. GitHub uses this for some resources.
+
+### User Hypermedia in Pagination
+
+#### Hypermedia and Pagination
+
+A recent trend for some APIs is to return a complete URLs for related resources. "Hypermedia" is a way of saying that an API representation of a resource includes links to other related resources, making the API self-descriptive. Theoretically, this means that a human or computer can discover what resources the API provides solely by interacting with it.
+
+This isn't too popular yet, but hypermedia is still useful for common operations like pagination. The GitHub API includes URLs for the previous and next page of elements in the `Link` header for the responess from its code search API.
+
+```
+$ http -p h https://api.github.com/search/code q==pony+user:mozilla
+HTTP/1.1 200 OK
+Access-Control-Allow-Credentials: true
+Access-Control-Allow-Origin: *
+Access-Control-Expose-Headers: ETag, Link, X-GitHub-OTP, X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Reset, X-OAuth-Scopes, X-Accepted-OAuth-Scopes, X-Poll-Interval
+Cache-Control: no-cache
+Content-Encoding: gzip
+Content-Security-Policy: default-src 'none'
+Content-Type: application/json; charset=utf-8
+Date: Thu, 26 Feb 2015 00:31:05 GMT
+Link: <https://api.github.com/search/code?q=pony%2Buser%3Amozilla&page=2>; rel="next", <https://api.github.com/search/code?q=pony%2Buser%3Amozilla&page=2>; rel="last"
+Server: GitHub.com
+Status: 200 OK
+Strict-Transport-Security: max-age=31536000; includeSubdomains; preload
+Transfer-Encoding: chunked
+Vary: Accept-Encoding
+X-Content-Type-Options: nosniff
+X-Frame-Options: deny
+X-GitHub-Media-Type: github.v3
+X-GitHub-Request-Id: 18157F83:12A9:1228824C:54EE6949
+X-RateLimit-Limit: 10
+X-RateLimit-Remaining: 6
+X-RateLimit-Reset: 1424910725
+X-Served-By: 474556b853193c38f1b14328ce2d1b7d
+X-XSS-Protection: 1; mode=block
+```
+
+Let's take a look at a `Link` header for a user's public events.
+
+```
+Link: <https://api.github.com/user/3124/events/public?page=2>; rel="next", <https://api.github.com/user/3124/events/public?page=10>; rel="last"
+```
+
+If we were to fetch the "next" page, we would get the following `Link` header. Notice how we get additional `prev` and `first` links, along with `next` and `last`.
+
+```
+Link: <https://api.github.com/user/3124/events/public?page=3>; rel="next", <https://api.github.com/user/3124/events/public?page=10>; rel="last", <https://api.github.com/user/3124/events/public?page=1>; rel="first", <https://api.github.com/user/3124/events/public?page=1>; rel="prev"
+```
+
+Fetching the last page will only return `prev` and `first` URLs.
+
+```
+Link: <https://api.github.com/user/3124/events/public?page=1>; rel="first", <https://api.github.com/user/3124/events/public?page=9>; rel="prev"
+```
